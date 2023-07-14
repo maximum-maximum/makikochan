@@ -18,6 +18,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/ssm"
 	"github.com/line/line-bot-sdk-go/linebot"
+	"golang.org/x/exp/slog"
 )
 
 var (
@@ -42,6 +43,7 @@ func handler(request events.APIGatewayProxyRequest) (events.APIGatewayProxyRespo
 		return events.APIGatewayProxyResponse{StatusCode: http.StatusInternalServerError}, err
 	}
 
+	slog.Info("hello world!", "name", "blue", "No", 5)
 	log.Printf("MAKISHIMA_EVENT1: %s", request)
 	log.Printf("MAKISHIMA_EVENT1.5: %s", request.Headers)
 	log.Printf("MAKISHIMA_EVENT1.5: %s", request.Headers["x-line-signature"])
@@ -89,11 +91,12 @@ func handler(request events.APIGatewayProxyRequest) (events.APIGatewayProxyRespo
 				text := message.Text
 
 				log.Printf("MAKISHIMA_EVENT8: %s", text)
+				slog.Info("message", "TEXT", text)
 
 				replyText := doPost(text)
 				log.Printf("MAKISHIMA_EVENT9: %s", replyText)
+				slog.Info("message", "REPLY", replyText)
 
-				// おうむ返しのメッセージを返信
 				if _, err := bot.ReplyMessage(event.ReplyToken, linebot.NewTextMessage(replyText)).Do(); err != nil {
 					log.Print(err)
 					log.Printf("MAKISHIMA_EVENT10: %s", text)
