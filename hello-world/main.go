@@ -4,10 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"io/ioutil"
-	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -35,78 +33,66 @@ var (
 func handler(request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
 	lcs, err := fetchParameterStore("LINE_CHANNEL_SECRET")
 	if err != nil {
+		slog.Error("GETTING_PARAMETER_FAILED", "PARAMETER_NAME", "LINE_CHANNEL_SECRET", "ERR", err)
 		return events.APIGatewayProxyResponse{StatusCode: http.StatusInternalServerError}, err
 	}
 
 	lcat, err := fetchParameterStore("LINE_CHANNEL_ACCESS_TOKEN")
 	if err != nil {
+		slog.Error("GETTING_PARAMETER_FAILED", "PARAMETER_NAME", "LINE_CHANNEL_ACCESS_TOKEN", "ERR", err)
 		return events.APIGatewayProxyResponse{StatusCode: http.StatusInternalServerError}, err
 	}
-
-	slog.Info("hello world!", "name", "blue", "No", 5)
-	log.Printf("MAKISHIMA_EVENT1: %s", request)
-	log.Printf("MAKISHIMA_EVENT1.5: %s", request.Headers)
-	log.Printf("MAKISHIMA_EVENT1.5: %s", request.Headers["x-line-signature"])
-	// log.Printf("MAKISHIMA_EVENT1.5: %s", res)
 
 	headers := http.Header{}
 	headers.Add("X-Line-Signature", request.Headers["x-line-signature"])
 
 	bot, err := linebot.New(lcs, lcat)
 	if err != nil {
-		log.Print(err)
+		slog.Error("CREATING_BOT_INSTANCE_FAILED", "ERR", err)
 		return events.APIGatewayProxyResponse{StatusCode: http.StatusInternalServerError}, err
-		// return events.APIGatewayProxyResponse{StatusCode: http.StatusCreated}, err
 	}
-	log.Printf("MAKISHIMA_EVENT2: %s", bot)
-	// log.Print(bot)
 
 	// http.Requestを作成
 	httpRequest, err := http.NewRequest(request.HTTPMethod, request.Path, strings.NewReader(request.Body))
 	if err != nil {
-		log.Print(err)
+		slog.Error("CREATING_REQUEST_FAILED", "ERR", err)
 		return events.APIGatewayProxyResponse{StatusCode: http.StatusInternalServerError}, err
 	}
-	log.Printf("MAKISHIMA_EVENT3: %s", httpRequest)
-	httpRequest.Header = headers
-	log.Printf("MAKISHIMA_EVENT3: %s", httpRequest)
 
-	// // ParseRequestにhttp.Requestを渡す
+	httpRequest.Header = headers
+
+	// ParseRequestにhttp.Requestを渡す
 	botEvents, err := bot.ParseRequest(httpRequest)
 	if err != nil {
-		// log.Print(err)
-		log.Printf("MAKISHIMA_EVENT4: %s", botEvents)
-		log.Printf("MAKISHIMA_EVENT5: %s", err)
+		slog.Error("PARSING_REQUEST_FAILED", "ERR", err)
 		return events.APIGatewayProxyResponse{StatusCode: http.StatusInternalServerError}, err
-		// return events.APIGatewayProxyResponse{StatusCode: http.StatusCreated}, err
 	}
-	log.Printf("MAKISHIMA_EVENT6: %s", botEvents)
 
 	for _, event := range botEvents {
-		log.Printf("MAKISHIMA_EVENT7: %s", event)
 		if event.Type == linebot.EventTypeMessage {
 			switch message := event.Message.(type) {
 			case *linebot.TextMessage:
 				// 受信したテキストメッセージを取得
 				text := message.Text
+				slog.Info("CLIENT_MESSAGE_TEXT", "TEXT", text)
 
-				log.Printf("MAKISHIMA_EVENT8: %s", text)
-				slog.Info("message", "TEXT", text)
-
-				replyText := doPost(text)
-				log.Printf("MAKISHIMA_EVENT9: %s", replyText)
-				slog.Info("message", "REPLY", replyText)
+				// テキストメッセージを元にChatGPTからの回答を取得
+				replyText, err := doPost(text)
+				if err != nil {
+					slog.Error("GETTING_REPLY_FAILED", "ERR", err)
+					return events.APIGatewayProxyResponse{StatusCode: http.StatusInternalServerError}, err
+				}
+				slog.Info("GPT_MESSAGE_TEXT", "TEXT", replyText)
 
 				if _, err := bot.ReplyMessage(event.ReplyToken, linebot.NewTextMessage(replyText)).Do(); err != nil {
-					log.Print(err)
-					log.Printf("MAKISHIMA_EVENT10: %s", text)
+					slog.Error("REPLY_FAILED", "ERR", err)
 				}
 			}
 		}
 	}
 
 	// 正常なレスポンスを返す
-	return events.APIGatewayProxyResponse{StatusCode: http.StatusOK, Body: fmt.Sprintf("Hello, %v", string(""))}, nil
+	return events.APIGatewayProxyResponse{StatusCode: http.StatusOK}, nil
 }
 
 // メッセージを追加する関数
@@ -130,12 +116,13 @@ type Message struct {
 	Content string `json:"content"`
 }
 
-func doPost(text string) string {
+func doPost(text string) (str string, err error) {
 	url := "https://api.openai.com/v1/chat/completions"
 
 	oak, err := fetchParameterStore("OPEN_API_KEY")
 	if err != nil {
-		// return events.APIGatewayProxyResponse{StatusCode: http.StatusInternalServerError}, err
+		slog.Error("GETTING_PARAMETER_FAILED", "PARAMETER_NAME", "OPEN_API_KEY", "ERR", err)
+		return "", err
 	}
 
 	// ChatRequestを作成
@@ -152,15 +139,15 @@ func doPost(text string) string {
 	// ChatRequestをJSONに変換
 	jsonData, err := json.Marshal(chatRequest)
 	if err != nil {
-		log.Printf("GPT_EVENT1: %s", err)
-		// log.Fatal(err)
+		slog.Error("MARSHALING_JSON_FAILED", "ERR", err)
+		return "", err
 	}
 
 	// POSTリクエストを作成
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
 	if err != nil {
-		log.Printf("GPT_EVENT2: %s", err)
-		// log.Fatal(err)
+		slog.Error("CREATING_REQUEST_FAILED", "ERR", err)
+		return "", err
 	}
 
 	// リクエストヘッダーの設定
@@ -173,38 +160,32 @@ func doPost(text string) string {
 	// リクエストを送信し、レスポンスを受け取る
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Printf("GPT_EVENT3: %s", err)
-		// log.Fatal(err)
+		slog.Error("SENDING_REQUEST_FAILED", "ERR", err)
+		return "", err
 	}
-	// defer resp.Body.Close()
 
 	defer func(Body io.ReadCloser) {
 		err := Body.Close()
 		if err != nil {
-			// panic(err)
-			log.Printf("GPT_EVENT4: %s", err)
+			slog.Error("CLOSING_BODY_FAILED", "ERR", err)
 		}
 	}(resp.Body)
 
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		log.Printf("GPT_EVENT5: %s", err)
-		// panic(err)
+		slog.Error("READING_BODY_FAILED", "ERR", err)
+		return "", err
 	}
 
 	var response OpenaiResponse
 	err = json.Unmarshal(body, &response)
 	if err != nil {
-		log.Printf("GPT_EVENT6: %s", err)
-		// return OpenaiResponse{}
+		slog.Error("UNMARSHALING_JSON_FAILED", "ERR", err)
+		return "", err
 	}
 
-	// messages = append(messages, Message{
-	// 	Role:    "assistant",
-	// 	Content: response.Choices[0].Messages.Content,
-	// })
 	ans := response.Choices[0].Messages.Content
-	return ans
+	return ans, err
 }
 
 type OpenaiRequest struct {
@@ -239,7 +220,6 @@ type Usage struct {
 
 // パラメータストアから設定値取得
 func fetchParameterStore(param string) (string, error) {
-
 	sess := session.Must(session.NewSession())
 	svc := ssm.New(
 		sess,
