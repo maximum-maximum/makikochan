@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"io"
 	"io/ioutil"
 	"net/http"
@@ -19,16 +18,45 @@ import (
 	"golang.org/x/exp/slog"
 )
 
-var (
-	// DefaultHTTPGetAddress Default Address
-	DefaultHTTPGetAddress = "https://checkip.amazonaws.com"
+type ChatRequest struct {
+	Model    string    `json:"model"`
+	Messages []Message `json:"messages"`
+}
 
-	// ErrNoIP No IP found in response
-	ErrNoIP = errors.New("No IP in HTTP response")
+type Message struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
 
-	// ErrNon200Response non 200 status code in response
-	ErrNon200Response = errors.New("Non 200 Response found")
-)
+type OpenaiRequest struct {
+	Model    string     `json:"model"`
+	Messages []Message2 `json:"messages"`
+}
+
+type OpenaiResponse struct {
+	ID      string   `json:"id"`
+	Object  string   `json:"object"`
+	Created int      `json:"created"`
+	Choices []Choice `json:"choices"`
+	Usages  Usage    `json:"usage"`
+}
+
+type Choice struct {
+	Index        int     `json:"index"`
+	Messages     Message `json:"message"`
+	FinishReason string  `json:"finish_reason"`
+}
+
+type Message2 struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+type Usage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+}
 
 func handler(request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
 	lcs, err := fetchParameterStore("LINE_CHANNEL_SECRET")
@@ -77,7 +105,7 @@ func handler(request events.APIGatewayProxyRequest) (events.APIGatewayProxyRespo
 				slog.Info("CLIENT_MESSAGE_TEXT", "TEXT", text)
 
 				// テキストメッセージを元にChatGPTからの回答を取得
-				replyText, err := doPost(text)
+				replyText, err := getGptReply(text)
 				if err != nil {
 					slog.Error("GETTING_REPLY_FAILED", "ERR", err)
 					return events.APIGatewayProxyResponse{StatusCode: http.StatusInternalServerError}, err
@@ -95,28 +123,7 @@ func handler(request events.APIGatewayProxyRequest) (events.APIGatewayProxyRespo
 	return events.APIGatewayProxyResponse{StatusCode: http.StatusOK}, nil
 }
 
-// メッセージを追加する関数
-func addMessage(messages []linebot.SendingMessage, text string) []linebot.SendingMessage {
-	// テキストメッセージを作成
-	message := linebot.NewTextMessage(text)
-
-	// メッセージを追加
-	messages = append(messages, message)
-
-	return messages
-}
-
-type ChatRequest struct {
-	Model    string    `json:"model"`
-	Messages []Message `json:"messages"`
-}
-
-type Message struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-}
-
-func doPost(text string) (str string, err error) {
+func getGptReply(text string) (str string, err error) {
 	url := "https://api.openai.com/v1/chat/completions"
 
 	oak, err := fetchParameterStore("OPEN_API_KEY")
@@ -186,36 +193,6 @@ func doPost(text string) (str string, err error) {
 
 	ans := response.Choices[0].Messages.Content
 	return ans, err
-}
-
-type OpenaiRequest struct {
-	Model    string     `json:"model"`
-	Messages []Message2 `json:"messages"`
-}
-
-type OpenaiResponse struct {
-	ID      string   `json:"id"`
-	Object  string   `json:"object"`
-	Created int      `json:"created"`
-	Choices []Choice `json:"choices"`
-	Usages  Usage    `json:"usage"`
-}
-
-type Choice struct {
-	Index        int     `json:"index"`
-	Messages     Message `json:"message"`
-	FinishReason string  `json:"finish_reason"`
-}
-
-type Message2 struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-}
-
-type Usage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
 }
 
 // パラメータストアから設定値取得
