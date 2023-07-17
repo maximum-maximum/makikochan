@@ -1,64 +1,85 @@
 package main
 
 import (
+	"errors"
 	"fmt"
-	"net/http"
-	"net/http/httptest"
 	"testing"
 
-	"github.com/aws/aws-lambda-go/events"
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/service/ssm"
+	"github.com/aws/aws-sdk-go/service/ssm/ssmiface"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 )
 
-func TestHandler(t *testing.T) {
-	t.Run("Unable to get IP", func(t *testing.T) {
-		DefaultHTTPGetAddress = "http://127.0.0.1:12345"
+type MockSSMClient struct {
+	ssmiface.SSMAPI
+	mock.Mock
+}
 
-		_, err := handler(events.APIGatewayProxyRequest{})
-		if err == nil {
-			t.Fatal("Error failed to trigger with an invalid request")
-		}
-	})
+// 正常系
+func TestFetchParameterStore(t *testing.T) {
+	expectedParam := "TEST_PARAMETER"
+	expectedValue := "test-value123!"
 
-	t.Run("Non 200 Response", func(t *testing.T) {
-		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(500)
-		}))
-		defer ts.Close()
+	// Create a mock SSM client
+	mockSvc := new(MockSSMClient)
 
-		DefaultHTTPGetAddress = ts.URL
+	// Configure the mock SSM client's behavior
+	mockSvc.On("GetParameter", &ssm.GetParameterInput{
+		Name:           aws.String(expectedParam),
+		WithDecryption: aws.Bool(true),
+	}).Return(&ssm.GetParameterOutput{
+		Parameter: &ssm.Parameter{
+			Value: aws.String(expectedValue),
+		},
+	}, nil)
 
-		_, err := handler(events.APIGatewayProxyRequest{})
-		if err != nil && err.Error() != ErrNon200Response.Error() {
-			t.Fatalf("Error failed to trigger with an invalid HTTP response: %v", err)
-		}
-	})
+	// Call the fetchParameterStore function
+	value, err := fetchParameterStore(expectedParam, mockSvc)
 
-	t.Run("Unable decode IP", func(t *testing.T) {
-		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(500)
-		}))
-		defer ts.Close()
+	// Assert that the mock GetParameter method was called with the expected input
+	mockSvc.AssertExpectations(t)
 
-		DefaultHTTPGetAddress = ts.URL
+	// Assert the returned value matches the expected value
+	assert.NoError(t, err)
+	assert.Equal(t, expectedValue, value)
+}
 
-		_, err := handler(events.APIGatewayProxyRequest{})
-		if err == nil {
-			t.Fatal("Error failed to trigger with an invalid HTTP response")
-		}
-	})
+// GetParameter returns mock SSM parameter.
+func (m *MockSSMClient) GetParameter(i *ssm.GetParameterInput) (*ssm.GetParameterOutput, error) {
+	args := m.Called(i)
+	output, _ := args.Get(0).(*ssm.GetParameterOutput)
+	return output, args.Error(1)
+}
 
-	t.Run("Successful Request", func(t *testing.T) {
-		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(200)
-			fmt.Fprintf(w, "127.0.0.1")
-		}))
-		defer ts.Close()
+// 異常系
+func TestFetchParameterStoreError(t *testing.T) {
+	expectedParam := "TEST_PARAMETER"
+	// expectedValue := "test-value123!"
 
-		DefaultHTTPGetAddress = ts.URL
+	errMsg := "Fetch Error"
 
-		_, err := handler(events.APIGatewayProxyRequest{})
-		if err != nil {
-			t.Fatal("Everything should be ok")
-		}
-	})
+	// Create a mock SSM client
+	mockSvc := new(MockSSMClient)
+
+	// Configure the mock SSM client's behavior
+	mockSvc.On("GetParameter", &ssm.GetParameterInput{
+		Name:           aws.String(expectedParam),
+		WithDecryption: aws.Bool(true),
+	}).Return(&ssm.GetParameterOutput{
+		Parameter: &ssm.Parameter{
+			Value: aws.String(""),
+		},
+	}, errors.New(fmt.Sprintf(errMsg)))
+
+	// Call the fetchParameterStore function
+	value, err := fetchParameterStore(expectedParam, mockSvc)
+
+	// Assert that the mock GetParameter method was called with the expected input
+	mockSvc.AssertExpectations(t)
+
+	// Assert the returned value matches the expected value
+	assert.EqualError(t, err, errMsg)
+	assert.Equal(t, errMsg, value)
 }

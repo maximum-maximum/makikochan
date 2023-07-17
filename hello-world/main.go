@@ -14,6 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/ssm"
+	"github.com/aws/aws-sdk-go/service/ssm/ssmiface"
 	"github.com/line/line-bot-sdk-go/linebot"
 	"golang.org/x/exp/slog"
 )
@@ -59,15 +60,27 @@ type Usage struct {
 }
 
 func handler(request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	lcs, err := fetchParameterStore("LINE_CHANNEL_SECRET")
+	sess := session.Must(session.NewSession())
+	svc := ssm.New(
+		sess,
+		aws.NewConfig().WithRegion("ap-northeast-1"),
+	)
+
+	lcs, err := fetchParameterStore("LINE_CHANNEL_SECRET", svc)
 	if err != nil {
 		slog.Error("GETTING_PARAMETER_FAILED", "PARAMETER_NAME", "LINE_CHANNEL_SECRET", "ERR", err)
 		return events.APIGatewayProxyResponse{StatusCode: http.StatusInternalServerError}, err
 	}
 
-	lcat, err := fetchParameterStore("LINE_CHANNEL_ACCESS_TOKEN")
+	lcat, err := fetchParameterStore("LINE_CHANNEL_ACCESS_TOKEN", svc)
 	if err != nil {
 		slog.Error("GETTING_PARAMETER_FAILED", "PARAMETER_NAME", "LINE_CHANNEL_ACCESS_TOKEN", "ERR", err)
+		return events.APIGatewayProxyResponse{StatusCode: http.StatusInternalServerError}, err
+	}
+
+	oak, err := fetchParameterStore("OPEN_API_KEY", svc)
+	if err != nil {
+		slog.Error("GETTING_PARAMETER_FAILED", "PARAMETER_NAME", "OPEN_API_KEY", "ERR", err)
 		return events.APIGatewayProxyResponse{StatusCode: http.StatusInternalServerError}, err
 	}
 
@@ -105,7 +118,7 @@ func handler(request events.APIGatewayProxyRequest) (events.APIGatewayProxyRespo
 				slog.Info("CLIENT_MESSAGE_TEXT", "TEXT", text)
 
 				// テキストメッセージを元にChatGPTからの回答を取得
-				replyText, err := getGptReply(text)
+				replyText, err := getGptReply(text, oak, svc)
 				if err != nil {
 					slog.Error("GETTING_REPLY_FAILED", "ERR", err)
 					return events.APIGatewayProxyResponse{StatusCode: http.StatusInternalServerError}, err
@@ -123,14 +136,8 @@ func handler(request events.APIGatewayProxyRequest) (events.APIGatewayProxyRespo
 	return events.APIGatewayProxyResponse{StatusCode: http.StatusOK}, nil
 }
 
-func getGptReply(text string) (str string, err error) {
+func getGptReply(text, oak string, svc ssmiface.SSMAPI) (str string, err error) {
 	url := "https://api.openai.com/v1/chat/completions"
-
-	oak, err := fetchParameterStore("OPEN_API_KEY")
-	if err != nil {
-		slog.Error("GETTING_PARAMETER_FAILED", "PARAMETER_NAME", "OPEN_API_KEY", "ERR", err)
-		return "", err
-	}
 
 	// ChatRequestを作成
 	chatRequest := ChatRequest{
@@ -196,13 +203,7 @@ func getGptReply(text string) (str string, err error) {
 }
 
 // パラメータストアから設定値取得
-func fetchParameterStore(param string) (string, error) {
-	sess := session.Must(session.NewSession())
-	svc := ssm.New(
-		sess,
-		aws.NewConfig().WithRegion("ap-northeast-1"),
-	)
-
+func fetchParameterStore(param string, svc ssmiface.SSMAPI) (string, error) {
 	res, err := svc.GetParameter(&ssm.GetParameterInput{
 		Name:           aws.String(param),
 		WithDecryption: aws.Bool(true),
